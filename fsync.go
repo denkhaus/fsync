@@ -250,6 +250,13 @@ func (s *Syncer) equal(dst, src string) bool {
 		return false
 	}
 
+	// check times
+	if !s.NoTimes {
+		if !info1.ModTime().Equal(info2.ModTime()) {
+			return false
+		}
+	}
+
 	// both have the same size, check the contents
 	f1, err := s.DestFs.Open(dst)
 	check(err)
