@@ -36,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/spf13/afero"
 )
@@ -185,15 +186,30 @@ func (s *Syncer) sync(dst, src string) {
 		return
 	}
 	check(err)
-	// make a map of filenames for quick lookup; used in deletion
-	// deletion below
+
+	mu := sync.Mutex{}
+	wg := sync.WaitGroup{}
 	m := make(map[string]bool, len(files))
+
+	// make a map of filenames for quick lookup; used in deletion below
 	for _, file := range files {
-		dst2 := filepath.Join(dst, file.Name())
-		src2 := filepath.Join(src, file.Name())
-		s.sync(dst2, src2)
-		m[file.Name()] = true
+		wg.Add(1)
+		go func(wg *sync.WaitGroup, mu *sync.Mutex, info os.FileInfo) {
+			defer wg.Done()
+
+			dst2 := filepath.Join(dst, info.Name())
+			src2 := filepath.Join(src, info.Name())
+			s.sync(dst2, src2)
+
+			mu.Lock()
+			m[info.Name()] = true
+			mu.Unlock()
+
+		}(&wg, &mu, file)
 	}
+
+	// wait until all sync operations finished
+	wg.Wait()
 
 	// delete files from dst that does not exist in src
 	if s.Delete {
@@ -228,8 +244,7 @@ func (s *Syncer) syncstats(dst, src string) {
 	// update dst's modification time
 	if !s.NoTimes {
 		if !dstat.ModTime().Equal(sstat.ModTime()) {
-			err := s.DestFs.Chtimes(dst, sstat.ModTime(), sstat.ModTime())
-			check(err)
+			check(s.DestFs.Chtimes(dst, sstat.ModTime(), sstat.ModTime()))
 		}
 	}
 }
