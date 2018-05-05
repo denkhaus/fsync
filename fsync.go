@@ -75,11 +75,18 @@ type Syncer struct {
 
 	SrcFs  afero.Fs
 	DestFs afero.Fs
+
+	//PoolMax defines max concurrent sync operations
+	PoolMax int
+	//poolCur defines current acquired slot
+	poolCur int
+	//muPool protects poolCur
+	muPool sync.Mutex
 }
 
 // NewSyncer creates a new instance of Syncer with default options.
 func NewSyncer() *Syncer {
-	s := Syncer{SrcFs: new(afero.OsFs), DestFs: new(afero.OsFs)}
+	s := Syncer{SrcFs: new(afero.OsFs), DestFs: new(afero.OsFs), PoolMax: 150}
 	s.DeleteFilter = func(f os.FileInfo) bool {
 		return false
 	}
@@ -197,6 +204,9 @@ func (s *Syncer) sync(dst, src string) {
 		wg.Add(1)
 		go func(wg *sync.WaitGroup, mu *sync.Mutex, info os.FileInfo) {
 			defer wg.Done()
+
+			s.acquireSlot()
+			defer s.releaseSlot()
 
 			dst2 := filepath.Join(dst, info.Name())
 			src2 := filepath.Join(src, info.Name())
@@ -338,6 +348,23 @@ func (s *Syncer) checkDir(dst, src string) (b bool, err error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func (s *Syncer) acquireSlot() {
+	defer s.muPool.Unlock()
+	for {
+		s.muPool.Lock()
+		if s.poolCur < s.PoolMax {
+			s.poolCur++
+			break
+		}
+		s.muPool.Unlock()
+	}
+}
+func (s *Syncer) releaseSlot() {
+	s.muPool.Lock()
+	defer s.muPool.Unlock()
+	s.poolCur--
 }
 
 func check(err error) {
